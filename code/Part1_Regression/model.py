@@ -418,22 +418,22 @@ def fit_pred_wls(X_tr, y_tr, X_val):
     w_ols = np.linalg.pinv(X_tr.T.dot(X_tr)).dot(X_tr.T).dot(y_tr)
     y_pred_tr = X_tr.dot(w_ols)
     residuals_abs = np.abs(y_tr - y_pred_tr)
-    
+
     # Bước 2: Hồi quy phần dư tuyệt đối theo X để dự đoán phương sai phân phối tại từng điểm (Auxiliary FGLS)
     w_aux = np.linalg.pinv(X_tr.T.dot(X_tr)).dot(X_tr.T).dot(residuals_abs)
     volatility_est = X_tr.dot(w_aux)
-    
+
     # Cắt các giá trị dự đoán rủi ro âm/gần 0
     volatility_est = np.clip(volatility_est, a_min=1e-5, a_max=None)
-    
+
     # Bước 3: Tạo trọng số W = 1 / Var = 1 / (volatility_est^2)
-    weights_tr = 1.0 / (volatility_est ** 2)
-    
+    weights_tr = 1.0 / (volatility_est**2)
+
     # Bước 4: Fit WLS sử dụng nhân vector thay vì sinh ma trận đường chéo khổng lồ
     XTw_X = (X_tr * weights_tr[:, None]).T.dot(X_tr)
     XTw_y = (X_tr * weights_tr[:, None]).T.dot(y_tr)
     w_wls = np.linalg.pinv(XTw_X).dot(XTw_y)
-    
+
     return X_val.dot(w_wls)
 
 
@@ -443,67 +443,65 @@ evaluate_model(
 
 # %% [markdown]
 # ## 3. Hồi quy Regularization
-# ### 3.1 Ridge Regression (L2) - Thuần Numpy
+
+# %% [markdown]
+# ### 3.1 Ridge Regression (L2)
+
+
 # %%
-best_lam_ridge = 10.0  # Mặc định, sẽ bị ghi đè bởi tối ưu dưới đây
+def ridge_closed_form(X, y, lam):
+    n_features = X.shape[1]
+    I = np.eye(n_features)
+    I[0, 0] = 0  # Không regularize bias
+    return np.linalg.pinv(X.T @ X + lam * I) @ X.T @ y
 
 
-def grid_search_ridge(X, y, lambdas):
+def ridge_cv(X, y, lambdas):
     kf = KFold(n_splits=10, shuffle=True, random_state=42)
     cv_errors = []
 
     for lam in lambdas:
         fold_errs = []
-        for train_index, val_index in kf.split(X):
-            X_fold_train, X_fold_val = X[train_index], X[val_index]
-            y_fold_train, y_fold_val = y[train_index], y[val_index]
+        for train_idx, val_idx in kf.split(X):
+            X_tr, X_val = X[train_idx], X[val_idx]
+            y_tr, y_val = y[train_idx], y[val_idx]
 
-            n_features = X_fold_train.shape[1]
-            I = np.eye(n_features)
-            I[0, 0] = 0
-            w = (
-                np.linalg.pinv(X_fold_train.T.dot(X_fold_train) + lam * I)
-                .dot(X_fold_train.T)
-                .dot(y_fold_train)
-            )
+            w = ridge_closed_form(X_tr, y_tr, lam)
+            y_pred = X_val @ w
+            fold_errs.append(np.mean((y_val - y_pred) ** 2))
 
-            y_pred = X_fold_val.dot(w)
-            fold_errs.append(np.mean((y_fold_val - y_pred) ** 2))
         cv_errors.append(np.mean(fold_errs))
 
     best_idx = np.argmin(cv_errors)
-    return lambdas[best_idx], lambdas, cv_errors
+    return lambdas[best_idx], cv_errors
 
 
+# Grid search
 lambdas_ridge = np.logspace(-2, 4, 30)
-best_lam_ridge, _, cv_errs_ridge = grid_search_ridge(
-    X_train_scaled_b, y_train, lambdas_ridge
-)
-print(f"Optimal Lambda for Ridge: {best_lam_ridge:.4f}")
+best_lam_ridge, cv_errs_ridge = ridge_cv(X_train_scaled_b, y_train, lambdas_ridge)
 
+print(f"Optimal Lambda (Ridge): {best_lam_ridge:.4f}")
+
+# Plot CV curve
 plt.figure(figsize=(10, 5))
-plt.plot(np.log10(lambdas_ridge), cv_errs_ridge, marker="o", color="teal")
+plt.plot(np.log10(lambdas_ridge), cv_errs_ridge, marker="o")
 plt.xlabel("log10(Lambda)")
-plt.ylabel("10-Fold CV MSE")
-plt.title("Ridge Regression Grid Search")
+plt.ylabel("CV MSE")
+plt.title("Ridge: Grid Search")
 plt.show()
 
+
 # %% [markdown]
-# ### 3.2 Regularization Path (Ridge)
+# #### Regularization Path (Ridge)
+
 # %%
 weights_ridge = []
 for lam in lambdas_ridge:
-    n_features = X_train_scaled_b.shape[1]
-    I = np.eye(n_features)
-    I[0, 0] = 0
-    w_lam = (
-        np.linalg.pinv(X_train_scaled_b.T.dot(X_train_scaled_b) + lam * I)
-        .dot(X_train_scaled_b.T)
-        .dot(y_train)
-    )
-    weights_ridge.append(w_lam[1:])
+    w = ridge_closed_form(X_train_scaled_b, y_train, lam)
+    weights_ridge.append(w[1:])  # bỏ bias
 
 weights_ridge = np.array(weights_ridge)
+
 plt.figure(figsize=(10, 6))
 for i in range(weights_ridge.shape[1]):
     plt.plot(np.log10(lambdas_ridge), weights_ridge[:, i])
@@ -513,17 +511,14 @@ plt.title("Ridge Regularization Path")
 plt.show()
 
 
+# %%
 def fit_pred_ridge(X_tr, y_tr, X_val):
-    lam = best_lam_ridge
-    n_features = X_tr.shape[1]
-    I = np.eye(n_features)
-    I[0, 0] = 0  # Không phạt bias chặn x_0
-    w = np.linalg.pinv(X_tr.T.dot(X_tr) + lam * I).dot(X_tr.T).dot(y_tr)
-    return X_val.dot(w)
+    w = ridge_closed_form(X_tr, y_tr, best_lam_ridge)
+    return X_val @ w
 
 
 evaluate_model(
-    "Ridge Regression (L2)",
+    "Ridge (L2)",
     fit_pred_ridge,
     X_train_scaled_b,
     y_train,
@@ -533,143 +528,115 @@ evaluate_model(
 
 
 # %% [markdown]
-# ### 3.2 Khoá Vector của Lasso Regression (L1) qua Coordinate Descent
-# Lấy Vector mục tiêu Loss của Epochs Optimizer
+# ### 3.2 Lasso Regression (L1 - Coordinate Descent)
+
+
 # %%
 def soft_threshold(rho, lam):
     if rho < -lam:
         return rho + lam
     elif rho > lam:
         return rho - lam
-    else:
-        return 0.0
+    return 0.0
 
 
-def lasso_regression(X, y, lam=1.0, epochs=30, w_init=None):
+def lasso_cd(X, y, lam, epochs=30, w_init=None):
     m, n = X.shape
-    if w_init is None:
-        w = np.zeros(n)
-    else:
-        w = w_init.copy()
+    w = np.zeros(n) if w_init is None else w_init.copy()
     losses = []
 
-    for epoch in range(epochs):
+    for _ in range(epochs):
         for j in range(n):
             X_j = X[:, j]
-            y_pred_no_j = X.dot(w) - w[j] * X_j
-            rho = X_j.T.dot(y - y_pred_no_j)
+            residual = y - (X @ w - w[j] * X_j)
+            rho = X_j.T @ residual
 
             if j == 0:
-                w[j] = rho / (X_j.T.dot(X_j))
+                w[j] = rho / (X_j.T @ X_j)
             else:
-                w[j] = soft_threshold(rho, lam) / (X_j.T.dot(X_j))
+                w[j] = soft_threshold(rho, lam) / (X_j.T @ X_j)
 
-        # Objective loss của đường Lasso L1 (MSE + L1_penalty)
-        current_loss = np.mean((X.dot(w) - y) ** 2) + lam * np.sum(np.abs(w[1:])) / m
-        losses.append(current_loss)
+        loss = np.mean((X @ w - y) ** 2) + lam * np.sum(np.abs(w[1:])) / m
+        losses.append(loss)
 
     return w, losses
 
 
-def lasso_path_cv(X, y, lambdas, epochs=30):
+def lasso_cv(X, y, lambdas, epochs=30):
     kf = KFold(n_splits=10, shuffle=True, random_state=42)
     cv_errors = []
 
-    # Warm start: 10 vectors cho 10 folds
     warm_starts = [np.zeros(X.shape[1]) for _ in range(10)]
 
-    for lam in lambdas:  # lambdas duyệt từ lớn xuống bé
+    for lam in lambdas:
         fold_errs = []
-        for i, (train_index, val_index) in enumerate(kf.split(X)):
-            X_fold_train, X_fold_val = X[train_index], X[val_index]
-            y_fold_train, y_fold_val = y[train_index], y[val_index]
+        for i, (train_idx, val_idx) in enumerate(kf.split(X)):
+            X_tr, X_val = X[train_idx], X[val_idx]
+            y_tr, y_val = y[train_idx], y[val_idx]
 
-            w_opt, _ = lasso_regression(
-                X_fold_train,
-                y_fold_train,
-                lam=lam,
-                epochs=epochs,
-                w_init=warm_starts[i],
-            )
-            warm_starts[i] = w_opt
+            w, _ = lasso_cd(X_tr, y_tr, lam, epochs, warm_starts[i])
+            warm_starts[i] = w
 
-            y_pred = X_fold_val.dot(w_opt)
-            fold_errs.append(np.mean((y_fold_val - y_pred) ** 2))
+            y_pred = X_val @ w
+            fold_errs.append(np.mean((y_val - y_pred) ** 2))
+
         cv_errors.append(np.mean(fold_errs))
 
     best_idx = np.argmin(cv_errors)
-    return lambdas[best_idx], lambdas, cv_errors
+    return lambdas[best_idx], cv_errors
 
 
+# Grid search
 lambdas_lasso = np.logspace(4, -1, 30)
-best_lam_lasso, _, cv_errs_lasso = lasso_path_cv(
-    X_train_scaled_b, y_train, lambdas_lasso, epochs=30
-)
-print(f"Optimal Lambda for Lasso: {best_lam_lasso:.4f}")
+best_lam_lasso, cv_errs_lasso = lasso_cv(X_train_scaled_b, y_train, lambdas_lasso)
+
+print(f"Optimal Lambda (Lasso): {best_lam_lasso:.4f}")
 
 plt.figure(figsize=(10, 5))
-plt.plot(np.log10(lambdas_lasso), cv_errs_lasso, marker="o", color="coral")
+plt.plot(np.log10(lambdas_lasso), cv_errs_lasso, marker="o")
 plt.xlabel("log10(Lambda)")
-plt.ylabel("10-Fold CV MSE")
-plt.title("Lasso Regression Grid Search (Warm Start)")
+plt.ylabel("CV MSE")
+plt.title("Lasso: Grid Search")
 plt.show()
 
+
 # %% [markdown]
-# ### Regularization Path (Lasso)
+# #### Regularization Path (Lasso)
+
 # %%
 weights_lasso = []
-warm_w = np.zeros(X_train_scaled_b.shape[1])
+w_warm = np.zeros(X_train_scaled_b.shape[1])
+
 for lam in lambdas_lasso:
-    w_lam_lasso, _ = lasso_regression(
-        X_train_scaled_b, y_train, lam=lam, epochs=30, w_init=warm_w
-    )
-    warm_w = w_lam_lasso
-    weights_lasso.append(w_lam_lasso[1:])
+    w_warm, _ = lasso_cd(X_train_scaled_b, y_train, lam, epochs=30, w_init=w_warm)
+    weights_lasso.append(w_warm[1:])
 
 weights_lasso = np.array(weights_lasso)
+
 plt.figure(figsize=(10, 6))
 for i in range(weights_lasso.shape[1]):
     plt.plot(np.log10(lambdas_lasso), weights_lasso[:, i])
+
+plt.gca().invert_xaxis()
 plt.xlabel("log10(Lambda)")
 plt.ylabel("Weights")
 plt.title("Lasso Regularization Path")
-plt.gca().invert_xaxis()
-plt.show()
-
-w_lasso, lasso_losses = lasso_regression(
-    X_train_scaled_b, y_train, lam=best_lam_lasso, epochs=50
-)
-
-plt.figure(figsize=(10, 6))
-plt.plot(range(1, 51), lasso_losses, marker="o", color="teal", label="Lasso Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Objective Function (MSE + L1 Penalty)")
-plt.title("Lasso Regression: Learning Curve (Train Loss vs Epoch)")
-plt.legend()
 plt.show()
 
 
+# %%
 def fit_pred_lasso(X_tr, y_tr, X_val):
-    w, _ = lasso_regression(X_tr, y_tr, lam=best_lam_lasso, epochs=50)
-    return X_val.dot(w)
+    w, _ = lasso_cd(X_tr, y_tr, best_lam_lasso, epochs=50)
+    return X_val @ w
 
 
 evaluate_model(
-    "Lasso Regression (L1)",
+    "Lasso (L1)",
     fit_pred_lasso,
     X_train_scaled_b,
     y_train,
     X_test_scaled_b,
     y_test,
-)
-
-plot_learning_curve_data_size(
-    "Lasso Regression (L1)",
-    fit_pred_lasso,
-    X_train_scaled_b,
-    y_train,
-    X_val_scaled_b,
-    y_val,
 )
 
 
