@@ -1,2 +1,4 @@
 
 /code/Part1_Regression/imgs
+*.pyc
+*.pkl
