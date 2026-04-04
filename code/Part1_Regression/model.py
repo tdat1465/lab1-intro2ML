@@ -25,7 +25,7 @@ preds_dict = {}
 metrics_list = []
 
 # %% [markdown]
-# ## 1. Đọc và Tiền Xử Lý Dữ Liệu
+# ## 1. Đọc dữ Liệu
 # %%
 train_df = pd.read_csv("../../data/train.csv")
 val_df = pd.read_csv("../../data/val.csv")
@@ -45,12 +45,10 @@ X_train, y_train = prepare_data(train_df)
 X_val, y_val = prepare_data(val_df)
 X_test, y_test = prepare_data(test_df)
 
-# Chuẩn hoá dữ liệu (Z-score normalization)
-mean_feat = np.mean(X_train, axis=0)
-std_feat = np.std(X_train, axis=0) + 1e-8
-X_train_scaled = (X_train - mean_feat) / std_feat
-X_val_scaled = (X_val - mean_feat) / std_feat
-X_test_scaled = (X_test - mean_feat) / std_feat
+# Không chuẩn hoá do dữ liệu (temp, hum, windspeed...) đã được scale sẵn
+X_train_scaled = X_train
+X_val_scaled = X_val
+X_test_scaled = X_test
 
 X_train_scaled_b = np.c_[np.ones((X_train_scaled.shape[0], 1)), X_train_scaled]
 X_val_scaled_b = np.c_[np.ones((X_val_scaled.shape[0], 1)), X_val_scaled]
@@ -263,7 +261,7 @@ model_ols = evaluate_model(
 )
 
 # %% [markdown]
-# ### So sánh với Sklearn LinearRegression
+# #### So sánh với Sklearn LinearRegression
 # Chạy mô hình hàm chuẩn `LinearRegression` của thư viện Sklearn để đối chiếu tính chính xác của thuật toán (Numpy) mà chúng ta tự cài.
 # %%
 from sklearn.linear_model import LinearRegression
@@ -708,7 +706,7 @@ def elastic_net(X, y, lam1=1.0, lam2=1.0, epochs=30):
             else:
                 w[j] = soft_threshold(rho, m * lam1) / (X_j.T.dot(X_j) + m * lam2)
 
-        # Phạt kép Elastic Net Loss chuẩn: 1/2m * MSE + l1*|w| + l2/2*w^2
+        # Loss: 1/2m * MSE + l1*|w| + l2/2*w^2
         current_loss = (
             np.mean((X.dot(w) - y) ** 2) / 2.0
             + lam1 * np.sum(np.abs(w[1:]))
