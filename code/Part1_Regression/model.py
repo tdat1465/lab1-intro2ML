@@ -77,14 +77,14 @@ def evaluate_model(
         y_cv = y_tr_full
 
     # 1. 10-Fold CV trên tập Train+Val (Dùng Sklearn Library)
-    kf = KFold(n_splits=10, shuffle=True, random_state=42)
+    kf = KFold(n_splits=10, shuffle=False)
     cv_mse = []
     cv_r2 = []
     for train_index, val_index in kf.split(X_cv):
         X_fold_train, X_fold_val = X_cv[train_index], X_cv[val_index]
         y_fold_train, y_fold_val = y_cv[train_index], y_cv[val_index]
 
-        y_val_pred = fit_predict_fn(X_fold_train, y_fold_train, X_fold_val)
+        y_val_pred, _ = fit_predict_fn(X_fold_train, y_fold_train, X_fold_val)
 
         mse = np.mean((y_fold_val - y_val_pred) ** 2)
         r2 = 1 - (
@@ -104,7 +104,7 @@ def evaluate_model(
 
     # 1.5 Validation Set Evaluation
     if X_va_full is not None and y_va_full is not None:
-        y_val_pred = fit_predict_fn(X_cv, y_cv, X_va_full)
+        y_val_pred, _ = fit_predict_fn(X_cv, y_cv, X_va_full)
         val_mse = np.mean((y_va_full - y_val_pred) ** 2)
         val_rmse = np.sqrt(val_mse)
         val_r2 = 1 - (
@@ -115,7 +115,7 @@ def evaluate_model(
         val_mse, val_rmse, val_r2 = None, None, None
 
     # 2. Test Set Evaluation
-    y_test_pred = fit_predict_fn(X_cv, y_cv, X_te_full)
+    y_test_pred, final_model = fit_predict_fn(X_cv, y_cv, X_te_full)
     test_mse = np.mean((y_te_full - y_test_pred) ** 2)
     test_rmse = np.sqrt(test_mse)
     test_mae = np.mean(np.abs(y_te_full - y_test_pred))
@@ -183,6 +183,7 @@ def evaluate_model(
 
     plt.tight_layout()
     plt.show()
+    return final_model
 
 
 # Helper Hàm vẽ Learning Curve theo lượng data (Data Size)
@@ -205,8 +206,8 @@ def plot_learning_curve_data_size(
         X_sub = X_tr_full[:subset_len]
         y_sub = y_tr_full[:subset_len]
 
-        y_train_pred = fit_predict_fn(X_sub, y_sub, X_sub)
-        y_val_pred = fit_predict_fn(X_sub, y_sub, X_val_full)
+        y_train_pred, _ = fit_predict_fn(X_sub, y_sub, X_sub)
+        y_val_pred, _ = fit_predict_fn(X_sub, y_sub, X_val_full)
 
         train_mse = np.mean((y_sub - y_train_pred) ** 2)
         val_mse = np.mean((y_val_full - y_val_pred) ** 2)
@@ -247,10 +248,10 @@ X_test_b = np.c_[np.ones((X_test.shape[0], 1)), X_test]
 
 def fit_pred_ols(X_tr, y_tr, X_val):
     w = np.linalg.pinv(X_tr.T.dot(X_tr)).dot(X_tr.T).dot(y_tr)
-    return X_val.dot(w)
+    return X_val.dot(w), w
 
 
-evaluate_model(
+model_ols = evaluate_model(
     "Normal Equations OLS",
     fit_pred_ols,
     X_train_b,
@@ -262,10 +263,57 @@ evaluate_model(
 )
 
 # %% [markdown]
+# ### So sánh với Sklearn LinearRegression
+# Chạy mô hình hàm chuẩn `LinearRegression` của thư viện Sklearn để đối chiếu tính chính xác của thuật toán (Numpy) mà chúng ta tự cài.
+# %%
+from sklearn.linear_model import LinearRegression
+
+
+def fit_pred_sk_ols(X_tr, y_tr, X_val):
+    model = LinearRegression(fit_intercept=False)
+    model.fit(X_tr, y_tr)
+    return model.predict(X_val), model
+
+
+model_sk_ols = evaluate_model(
+    "Sklearn Linear Regression",
+    fit_pred_sk_ols,
+    X_train_b,
+    y_train,
+    X_test_b,
+    y_test,
+    X_val_b,
+    y_val,
+)
+
+print("\n" + "=" * 50)
+print("SO SÁNH NUMPY OLS VÀ SKLEARN LINEAR REGRESSION")
+print("=" * 50)
+
+max_pred_diff = np.max(
+    np.abs(preds_dict["Normal Equations OLS"] - preds_dict["Sklearn Linear Regression"])
+)
+w_sk = model_sk_ols.coef_
+# model_ols (Numpy) trả về ma trận (hoặc vector) weights
+max_weight_diff = np.max(np.abs(model_ols - w_sk))
+
+print(f"Chênh lệch dự đoán lớn nhất (Max Pred Diff): {max_pred_diff:.10e}")
+print(f"Chênh lệch trọng số lớn nhất (Max Weight Diff): {max_weight_diff:.10e}")
+
+if np.allclose(
+    preds_dict["Normal Equations OLS"],
+    preds_dict["Sklearn Linear Regression"],
+    atol=1e-5,
+):
+    print("=> KẾT LUẬN: Cài đặt OLS thủ công bằng Numpy khớp hoàn toàn với Sklearn!")
+else:
+    print("=> KẾT LUẬN: Có biểu hiện sai lệch giữa Numpy và Sklearn.")
+
+# %% [markdown]
 # ### 2.1.1 Kiểm tra giả định Gauss-Markov
 # Kiểm tra QQ-plot xác định phân phối chuẩn và Breusch-Pagan test kiểm tra Heteroscedasticity.
 # %%
-y_train_pred_ols = fit_pred_ols(X_train_b, y_train, X_train_b)
+y_train_pred_ols, _ = fit_pred_ols(X_train_b, y_train, X_train_b)
 residuals_train_ols = y_train - y_train_pred_ols
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -352,10 +400,10 @@ w_gd, _ = minibatch_gd(
 
 def fit_pred_gd(X_tr, y_tr, X_val):
     w, _ = minibatch_gd(X_tr, y_tr, epochs=200, batch_size=128, lr_init=0.05)
-    return X_val.dot(w)
+    return X_val.dot(w), w
 
 
-evaluate_model(
+_ = evaluate_model(
     "Mini-Batch GD",
     fit_pred_gd,
     X_train_scaled_b,
@@ -434,10 +482,10 @@ def fit_pred_wls(X_tr, y_tr, X_val):
     XTw_y = (X_tr * weights_tr[:, None]).T.dot(y_tr)
     w_wls = np.linalg.pinv(XTw_X).dot(XTw_y)
 
-    return X_val.dot(w_wls)
+    return X_val.dot(w_wls), w_wls
 
 
-evaluate_model(
+_ = evaluate_model(
     "WLS", fit_pred_wls, X_train_b, y_train, X_test_b, y_test, X_val_b, y_val
 )
 
@@ -514,10 +562,10 @@ plt.show()
 # %%
 def fit_pred_ridge(X_tr, y_tr, X_val):
     w = ridge_closed_form(X_tr, y_tr, best_lam_ridge)
-    return X_val @ w
+    return X_val @ w, w
 
 
-evaluate_model(
+_ = evaluate_model(
     "Ridge (L2)",
     fit_pred_ridge,
     X_train_scaled_b,
@@ -627,10 +675,10 @@ plt.show()
 # %%
 def fit_pred_lasso(X_tr, y_tr, X_val):
     w, _ = lasso_cd(X_tr, y_tr, best_lam_lasso, epochs=50)
-    return X_val @ w
+    return X_val @ w, w
 
 
-evaluate_model(
+_ = evaluate_model(
     "Lasso (L1)",
     fit_pred_lasso,
     X_train_scaled_b,
@@ -736,10 +784,10 @@ plt.show()
 
 def fit_pred_elastic(X_tr, y_tr, X_val):
     w, _ = elastic_net(X_tr, y_tr, lam1=best_lam1_el, lam2=best_lam2_el, epochs=50)
-    return X_val.dot(w)
+    return X_val.dot(w), w
 
 
-evaluate_model(
+_ = evaluate_model(
     "Elastic Net",
     fit_pred_elastic,
     X_train_scaled_b,
@@ -762,6 +810,7 @@ feature_names = list(
 )
 
 # 1. Lasso Nonzero
+w_lasso, _ = lasso_cd(X_train_scaled_b, y_train, best_lam_lasso, epochs=50)
 lasso_selected = []
 for i, w_val in enumerate(w_lasso[1:]):
     if abs(w_val) > 1e-5:
@@ -848,32 +897,43 @@ print(
 )
 
 # %% [markdown]
-# ## 4. Hàm cơ sở phi tuyến (Sklearn)
+# ## 4. Hàm Cơ Sở Phi Tuyến (Nonlinear Basis Functions)
+# Lựa chọn: Polynomial, Gaussian RBF, B-Spline. Phân tích Ablation và Interaction.
 # %%
 from sklearn.linear_model import Ridge
-from sklearn.preprocessing import PolynomialFeatures
+from sklearn.preprocessing import PolynomialFeatures, SplineTransformer
 from sklearn.kernel_approximation import RBFSampler
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import KFold
+
+# Bọc Ridge với Sklearn để tiện dùng Transformation Pipelines
+ridge_alpha = best_lam_ridge if "best_lam_ridge" in globals() else 10.0
+
+print("\n" + "=" * 60)
+print("=== 4.1. Áp dụng 3 Loại Hàm Cơ Sở ===")
+print("=" * 60)
+
+
+def fit_pred_sk_ridge(X_tr, y_tr, X_val):
+    model = Ridge(alpha=ridge_alpha)
+    model.fit(X_tr, y_tr)
+    return model.predict(X_val), model
+
 
 # 1. Polynomial
-poly = PolynomialFeatures(degree=2)
+poly = PolynomialFeatures(degree=2, include_bias=False)
 X_train_poly = poly.fit_transform(X_train_scaled)
 X_val_poly = poly.transform(X_val_scaled)
 X_test_poly = poly.transform(X_test_scaled)
-
-
-def fit_pred_sk_poly(X_tr, y_tr, X_val):
-    model = Ridge(alpha=best_lam_ridge)
-    model.fit(X_tr, y_tr)
-    return model.predict(X_val)
-
-
-evaluate_model(
+poly_model = evaluate_model(
     "Ridge + Polynomial (deg=2)",
-    fit_pred_sk_poly,
+    fit_pred_sk_ridge,
     X_train_poly,
     y_train,
     X_test_poly,
     y_test,
+    X_val_poly,
+    y_val,
 )
 
 # 2. Gaussian RBF Features
@@ -881,10 +941,9 @@ rbf = RBFSampler(gamma=0.1, random_state=42, n_components=100)
 X_train_rbf = rbf.fit_transform(X_train_scaled)
 X_val_rbf = rbf.transform(X_val_scaled)
 X_test_rbf = rbf.transform(X_test_scaled)
-
-evaluate_model(
-    "Ridge + Gaussian RBF kernel",
-    fit_pred_sk_poly,
+_ = evaluate_model(
+    "Ridge + Gaussian RBF (n=100)",
+    fit_pred_sk_ridge,
     X_train_rbf,
     y_train,
     X_test_rbf,
@@ -892,6 +951,248 @@ evaluate_model(
     X_val_rbf,
     y_val,
 )
+
+# 3. SplineTransformer (B-Splines)
+spline = SplineTransformer(n_knots=4, degree=3, include_bias=False)
+X_train_spline = spline.fit_transform(X_train_scaled)
+X_val_spline = spline.transform(X_val_scaled)
+X_test_spline = spline.transform(X_test_scaled)
+_ = evaluate_model(
+    "Ridge + B-Spline (knots=4, deg=3)",
+    fit_pred_sk_ridge,
+    X_train_spline,
+    y_train,
+    X_test_spline,
+    y_test,
+    X_val_spline,
+    y_val,
+)
+
+# %% [markdown]
+# ### 4.2 Vẽ Validation Curve theo độ phức tạp
+# %%
+# Validation Curve: Bậc đa thức (Degree)
+degrees = [1, 2, 3, 4]
+poly_train_errs, poly_val_errs = [], []
+kf_4 = KFold(n_splits=5, shuffle=True, random_state=42)
+
+for d in degrees:
+    poly_d = PolynomialFeatures(degree=d, include_bias=False)
+    X_poly_d = poly_d.fit_transform(X_train_scaled)
+
+    t_err, v_err = [], []
+    for tr_idx, val_idx in kf_4.split(X_poly_d):
+        m = Ridge(alpha=ridge_alpha).fit(X_poly_d[tr_idx], y_train[tr_idx])
+        t_err.append(mean_squared_error(y_train[tr_idx], m.predict(X_poly_d[tr_idx])))
+        v_err.append(mean_squared_error(y_train[val_idx], m.predict(X_poly_d[val_idx])))
+
+    poly_train_errs.append(np.mean(t_err))
+    poly_val_errs.append(np.mean(v_err))
+
+# Validation Curve: n_components (RBF)
+n_comps = [10, 50, 100, 200, 500]
+rbf_train_errs, rbf_val_errs = [], []
+
+for n in n_comps:
+    rbf_n = RBFSampler(gamma=0.1, n_components=n, random_state=42)
+    X_rbf_n = rbf_n.fit_transform(X_train_scaled)
+
+    t_err, v_err = [], []
+    for tr_idx, val_idx in kf_4.split(X_rbf_n):
+        m = Ridge(alpha=ridge_alpha).fit(X_rbf_n[tr_idx], y_train[tr_idx])
+        t_err.append(mean_squared_error(y_train[tr_idx], m.predict(X_rbf_n[tr_idx])))
+        v_err.append(mean_squared_error(y_train[val_idx], m.predict(X_rbf_n[val_idx])))
+
+    rbf_train_errs.append(np.mean(t_err))
+    rbf_val_errs.append(np.mean(v_err))
+
+# Validation Curve: B-Spline (Số lượng knots)
+knots_list = [3, 4, 5, 8, 12, 20]  # n_knots tối thiểu là 3 đối với degree=3
+spline_train_errs, spline_val_errs = [], []
+
+for k in knots_list:
+    spline_k = SplineTransformer(n_knots=k, degree=3, include_bias=False)
+    X_spline_k = spline_k.fit_transform(X_train_scaled)
+
+    t_err, v_err = [], []
+    for tr_idx, val_idx in kf_4.split(X_spline_k):
+        m = Ridge(alpha=ridge_alpha).fit(X_spline_k[tr_idx], y_train[tr_idx])
+        t_err.append(mean_squared_error(y_train[tr_idx], m.predict(X_spline_k[tr_idx])))
+        v_err.append(
+            mean_squared_error(y_train[val_idx], m.predict(X_spline_k[val_idx]))
+        )
+
+    spline_train_errs.append(np.mean(t_err))
+    spline_val_errs.append(np.mean(v_err))
+
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+axes[0].plot(degrees, poly_train_errs, label="Train MSE", marker="o")
+axes[0].plot(degrees, poly_val_errs, label="Validation MSE", marker="s")
+axes[0].set_xlabel("Polynomial Degree")
+axes[0].set_ylabel("MSE")
+axes[0].set_title("Validation Curve: Polynomial Features")
+axes[0].set_xticks(degrees)
+axes[0].legend()
+
+axes[1].plot(n_comps, rbf_train_errs, label="Train MSE", marker="o")
+axes[1].plot(n_comps, rbf_val_errs, label="Validation MSE", marker="s")
+axes[1].set_xlabel("Number of RBF Components")
+axes[1].set_ylabel("MSE")
+axes[1].set_title("Validation Curve: Gaussian RBF")
+axes[1].set_xticks(n_comps)
+axes[1].legend()
+
+axes[2].plot(knots_list, spline_train_errs, label="Train MSE", marker="o")
+axes[2].plot(knots_list, spline_val_errs, label="Validation MSE", marker="s")
+axes[2].set_xlabel("Number of Knots (n_knots)")
+axes[2].set_ylabel("MSE")
+axes[2].set_title("Validation Curve: B-Splines")
+axes[2].set_xticks(knots_list)
+axes[2].legend()
+
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# ### 4.3 Ablation Study: Tính quan trọng của nhóm đặc trưng
+# %%
+print("\n" + "=" * 60)
+print("=== 4.3. Ablation Study ===")
+print("=" * 60)
+
+feat_names = list(
+    train_df.drop(columns=features_to_drop + ["cnt"], errors="ignore").columns
+)
+
+# Cấu hình Nhóm đặc trưng
+groups = {
+    "Weather/Environment": [
+        f
+        for f in feat_names
+        if f in ["weathersit", "temp", "atemp", "hum", "windspeed"]
+    ],
+    "Time/Date": [f for f in feat_names if f in ["yr", "mnth", "hr"]],
+    "Calendar/Events": [
+        f for f in feat_names if f in ["season", "holiday", "weekday", "workingday"]
+    ],
+}
+
+base_model = Ridge(alpha=ridge_alpha).fit(X_train_scaled, y_train)
+base_mse = mean_squared_error(y_test, base_model.predict(X_test_scaled))
+print(f"Balseline MSE (Full features): {base_mse:.4f}\n")
+
+performance_drop = {}
+for group_name, group_feats in groups.items():
+    if not group_feats:
+        continue
+
+    drop_indices = [feat_names.index(f) for f in group_feats]
+    keep_indices = [i for i in range(len(feat_names)) if i not in drop_indices]
+
+    X_tr_ablated = X_train_scaled[:, keep_indices]
+    X_test_ablated = X_test_scaled[:, keep_indices]
+
+    abl_model = Ridge(alpha=ridge_alpha).fit(X_tr_ablated, y_train)
+    abl_pred = abl_model.predict(X_test_ablated)
+    abl_mse = mean_squared_error(y_test, abl_pred)
+
+    diff = abl_mse - base_mse
+    performance_drop[group_name] = diff
+    print(f"Drop '{group_name}' -> MSE: {abl_mse:.4f} (Chênh lệch: +{diff:.4f})")
+
+worst_group = max(performance_drop, key=performance_drop.get)
+print(f"\n=> Nhóm đặc trưng ảnh hưởng nghiêm trọng nhất khi thiếu vắng: {worst_group}")
+
+# %% [markdown]
+# ### 4.4 Phân tích Cơ chế Tương Tác ($x_i x_j$)
+
+# %% [markdown]
+# #### Interaction Only
+# %%
+print("\n" + "=" * 60)
+print("=== 4.4. Phân tích Hiệu ứng Tương tác (Interaction Only) ===")
+print("=" * 60)
+
+# Cấu hình PolynomialFeatures chỉ tạo tương tác chéo (không có bình phương)
+poly_inter = PolynomialFeatures(degree=2, interaction_only=True, include_bias=False)
+X_train_inter = poly_inter.fit_transform(X_train_scaled)
+X_val_inter = poly_inter.transform(X_val_scaled)
+X_test_inter = poly_inter.transform(X_test_scaled)
+
+inter_model = evaluate_model(
+    "Ridge + All Interactions",
+    fit_pred_sk_ridge,
+    X_train_inter,
+    y_train,
+    X_test_inter,
+    y_test,
+    X_val_inter,
+    y_val,
+)
+
+# %% [markdown]
+# #### Phân tích Tương tác Thủ công (Domain Knowledge)
+# Bổ sung một vài biến tương tác cụ thể nhằm tối ưu kích thước mô hình thay vì tính tất cả.
+# %%
+print("\n" + "=" * 60)
+print("=== 4.5. Phân tích Tương tác Thủ công (Tuỳ chỉnh) ===")
+print("=" * 60)
+idx_temp = feat_names.index("temp")
+idx_hum = feat_names.index("hum")
+idx_hr = feat_names.index("hr")
+idx_work = feat_names.index("workingday")
+
+# Nối thêm tích của (temp * hum) và (hr * workingday) vào data gốc
+X_train_custom = np.c_[
+    X_train_scaled,
+    X_train_scaled[:, idx_temp] * X_train_scaled[:, idx_hum],
+    X_train_scaled[:, idx_hr] * X_train_scaled[:, idx_work],
+]
+X_val_custom = np.c_[
+    X_val_scaled,
+    X_val_scaled[:, idx_temp] * X_val_scaled[:, idx_hum],
+    X_val_scaled[:, idx_hr] * X_val_scaled[:, idx_work],
+]
+X_test_custom = np.c_[
+    X_test_scaled,
+    X_test_scaled[:, idx_temp] * X_test_scaled[:, idx_hum],
+    X_test_scaled[:, idx_hr] * X_test_scaled[:, idx_work],
+]
+
+custom_model = evaluate_model(
+    "Ridge + Custom Interactions (temp*hum, hr*work)",
+    fit_pred_sk_ridge,
+    X_train_custom,
+    y_train,
+    X_test_custom,
+    y_test,
+    X_val_custom,
+    y_val,
+)
+# %% [markdown]
+# #### So sánh hiệu quả của các mô hình
+# %%
+print("\nSO SÁNH MỨC ĐỘ HIỆU QUẢ CỦA TƯƠNG TÁC:")
+print(f"MSE Gốc Linear                    : {base_mse:.4f}")
+print(
+    f"MSE Gốc + 2 Tương tác (Tuỳ chỉnh) : {mean_squared_error(y_test, custom_model.predict(X_test_custom)):.4f}"
+)
+print(
+    f"MSE Gốc + TẤT CẢ Tương tác chéo   : {mean_squared_error(y_test, inter_model.predict(X_test_inter)):.4f}"
+)
+print(
+    f"MSE Bậc 2 Đầy đủ (Tương tác + x^2): {mean_squared_error(y_test, poly_model.predict(X_test_poly)):.4f}"
+)
+
+# %% [markdown]
+# **Nhận xét**:
+
+# - Việc thêm một số tương tác có chọn lọc giúp cải thiện nhẹ hiệu năng so với mô hình tuyến tính gốc.
+# - Tuy nhiên, thêm toàn bộ tương tác chéo lại làm MSE tăng mạnh → dấu hiệu overfitting / nhiễu.
+# - Mô hình đa thức bậc 2 đầy đủ cho kết quả tốt nhất, cho thấy dữ liệu có quan hệ phi tuyến rõ ràng.
+
+# **Kết luận:**
+# Việc bổ sung biến tương tác chỉ hiệu quả khi được kiểm soát hợp lý; thêm quá nhiều đặc trưng dễ làm mô hình kém tổng quát.
 
 # %% [markdown]
 # ## 5. Mô hình Nâng cao
@@ -905,10 +1206,10 @@ from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
 def fit_pred_bayes(X_tr, y_tr, X_val):
     model = BayesianRidge()
     model.fit(X_tr, y_tr)
-    return model.predict(X_val)
+    return model.predict(X_val), model
 
 
-evaluate_model(
+_ = evaluate_model(
     "Bayesian Ridge",
     fit_pred_bayes,
     X_train_scaled,
@@ -955,10 +1256,10 @@ plt.show()
 def fit_pred_kr(X_tr, y_tr, X_val):
     kr = KernelRidge(kernel="rbf", alpha=0.1, gamma=0.1)
     kr.fit(X_tr, y_tr)
-    return kr.predict(X_val)
+    return kr.predict(X_val), kr
 
 
-evaluate_model(
+_ = evaluate_model(
     "Kernel Ridge (RBF)", fit_pred_kr, X_train_scaled, y_train, X_test_scaled, y_test
 )
 
@@ -969,10 +1270,10 @@ def fit_pred_gpr(X_tr, y_tr, X_val):
     )
     gpr = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=0, alpha=0.1)
     gpr.fit(X_tr, y_tr)
-    return gpr.predict(X_val)
+    return gpr.predict(X_val), gpr
 
 
-evaluate_model(
+_ = evaluate_model(
     "Gaussian Process",
     fit_pred_gpr,
     X_train_scaled,
