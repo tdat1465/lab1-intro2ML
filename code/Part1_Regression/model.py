@@ -77,6 +77,8 @@ def evaluate_model(
     # 1. 10-Fold CV trên tập Train+Val (Dùng Sklearn Library)
     kf = KFold(n_splits=10, shuffle=False)
     cv_mse = []
+    cv_rmse = []
+    cv_mae = []
     cv_r2 = []
     for train_index, val_index in kf.split(X_cv):
         X_fold_train, X_fold_val = X_cv[train_index], X_cv[val_index]
@@ -85,32 +87,40 @@ def evaluate_model(
         y_val_pred, _ = fit_predict_fn(X_fold_train, y_fold_train, X_fold_val)
 
         mse = np.mean((y_fold_val - y_val_pred) ** 2)
+        rmse = np.sqrt(mse)
+        mae = np.mean(np.abs(y_fold_val - y_val_pred))
         r2 = 1 - (
             np.sum((y_fold_val - y_val_pred) ** 2)
             / np.sum((y_fold_val - np.mean(y_fold_val)) ** 2)
         )
         cv_mse.append(mse)
+        cv_rmse.append(rmse)
+        cv_mae.append(mae)
         cv_r2.append(r2)
 
     mean_cv_mse = np.mean(cv_mse)
     std_cv_mse = np.std(cv_mse)
+    mean_cv_rmse = np.mean(cv_rmse)
+    std_cv_rmse = np.std(cv_rmse)
+    mean_cv_mae = np.mean(cv_mae)
+    std_cv_mae = np.std(cv_mae)
     mean_cv_r2 = np.mean(cv_r2)
     std_cv_r2 = np.std(cv_r2)
 
-    cv_rmse = np.sqrt(cv_mse)
-    cv_scores_dict[model_name] = cv_rmse
+    cv_scores_dict[model_name] = np.array(cv_rmse)
 
     # 1.5 Validation Set Evaluation
     if X_va_full is not None and y_va_full is not None:
         y_val_pred, _ = fit_predict_fn(X_cv, y_cv, X_va_full)
         val_mse = np.mean((y_va_full - y_val_pred) ** 2)
         val_rmse = np.sqrt(val_mse)
+        val_mae = np.mean(np.abs(y_va_full - y_val_pred))
         val_r2 = 1 - (
             np.sum((y_va_full - y_val_pred) ** 2)
             / np.sum((y_va_full - np.mean(y_va_full)) ** 2)
         )
     else:
-        val_mse, val_rmse, val_r2 = None, None, None
+        val_mse, val_rmse, val_mae, val_r2 = None, None, None, None
 
     # 2. Test Set Evaluation
     y_test_pred, final_model = fit_predict_fn(X_cv, y_cv, X_te_full)
@@ -132,11 +142,14 @@ def evaluate_model(
     metric_dict = {
         "Model": model_name,
         "CV_MSE (Mean ± Std)": f"{mean_cv_mse:.2f} ± {std_cv_mse:.2f}",
+        "CV_RMSE (Mean ± Std)": f"{mean_cv_rmse:.2f} ± {std_cv_rmse:.2f}",
+        "CV_MAE (Mean ± Std)": f"{mean_cv_mae:.2f} ± {std_cv_mae:.2f}",
         "CV_R2 (Mean ± Std)": f"{mean_cv_r2:.4f} ± {std_cv_r2:.4f}",
     }
     if val_mse is not None:
         metric_dict["Val MSE"] = val_mse
         metric_dict["Val RMSE"] = val_rmse
+        metric_dict["Val MAE"] = val_mae
         metric_dict["Val R2"] = val_r2
 
     metric_dict.update(
@@ -260,6 +273,55 @@ model_ols = evaluate_model(
     y_val,
 )
 
+from sklearn.model_selection import learning_curve
+
+
+def plot_sklearn_learning_curve_wrapper(estimator, title, X, y, cv=5):
+    # Sử dụng learning_curve tích hợp sẵn để linh hoạt thay đổi train_sizes kích thước dữ liệu
+    train_sizes, train_scores, test_scores = learning_curve(
+        estimator,
+        X,
+        y,
+        cv=cv,
+        scoring="neg_root_mean_squared_error",
+        train_sizes=np.linspace(0.1, 1.0, 5),
+        n_jobs=-1,
+    )
+
+    # Chuyển về Root Mean Squared Error (RMSE) dương
+    train_scores_mean = -np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    test_scores_mean = -np.mean(test_scores, axis=1)
+    test_scores_std = np.std(test_scores, axis=1)
+
+    plt.figure(figsize=(7, 4))
+    plt.plot(train_sizes, train_scores_mean, "o-", color="r", label="Training error")
+    plt.fill_between(
+        train_sizes,
+        train_scores_mean - train_scores_std,
+        train_scores_mean + train_scores_std,
+        alpha=0.1,
+        color="r",
+    )
+    plt.plot(
+        train_sizes, test_scores_mean, "o-", color="g", label="Cross-validation error"
+    )
+    plt.fill_between(
+        train_sizes,
+        test_scores_mean - test_scores_std,
+        test_scores_mean + test_scores_std,
+        alpha=0.1,
+        color="g",
+    )
+
+    plt.title(f"Learning Curve (Train Size): {title}")
+    plt.xlabel("Số lượng mẫu phân chia huấn luyện")
+    plt.ylabel("RMSE (Thấp là tốt)")
+    plt.legend(loc="best")
+    plt.grid(True)
+    plt.show()
+
+
 # %% [markdown]
 # #### So sánh với Sklearn LinearRegression
 # Chạy mô hình hàm chuẩn `LinearRegression` của thư viện Sklearn để đối chiếu tính chính xác của thuật toán (Numpy) mà chúng ta tự cài.
@@ -282,6 +344,13 @@ model_sk_ols = evaluate_model(
     y_test,
     X_val_b,
     y_val,
+)
+
+plot_sklearn_learning_curve_wrapper(
+    LinearRegression(fit_intercept=False),
+    "Sklearn Linear Regression",
+    X_train_b,
+    y_train,
 )
 
 print("\n" + "=" * 50)
@@ -383,6 +452,8 @@ def minibatch_gd(X, y, epochs=100, batch_size=128, lr_init=0.01):
             epoch_loss += np.sum(error**2)
 
             gradient = (1 / batch_size) * X_i.T.dot(error)
+            # Add gradient clipping to prevent exploding gradients (NaN)
+            gradient = np.clip(gradient, -10000, 10000)
             w -= lr * gradient
 
         losses.append(epoch_loss / m)
@@ -392,12 +463,12 @@ def minibatch_gd(X, y, epochs=100, batch_size=128, lr_init=0.01):
 
 # Lấy w_gd dùng sau nếu cần (hoặc chỉ quan sát quá trình chạy cơ bản)
 w_gd, _ = minibatch_gd(
-    X_train_scaled_b, y_train, epochs=200, batch_size=128, lr_init=0.05
+    X_train_scaled_b, y_train, epochs=200, batch_size=128, lr_init=0.01
 )
 
 
 def fit_pred_gd(X_tr, y_tr, X_val):
-    w, _ = minibatch_gd(X_tr, y_tr, epochs=200, batch_size=128, lr_init=0.05)
+    w, _ = minibatch_gd(X_tr, y_tr, epochs=200, batch_size=128, lr_init=0.01)
     return X_val.dot(w), w
 
 
@@ -429,7 +500,7 @@ time_ols = time.process_time() - start_ols
 
 # 2. Đo thời gian Mini-Batch Gradient Descent
 start_gd = time.process_time()
-_, _ = minibatch_gd(X_train_scaled_b, y_train, epochs=200, batch_size=128, lr_init=0.05)
+_, _ = minibatch_gd(X_train_scaled_b, y_train, epochs=200, batch_size=128, lr_init=0.01)
 time_gd = time.process_time() - start_gd
 
 print("=" * 60)
@@ -570,6 +641,11 @@ _ = evaluate_model(
     y_train,
     X_test_scaled_b,
     y_test,
+)
+
+
+plot_sklearn_learning_curve_wrapper(
+    Ridge(alpha=best_lam_ridge), "Ridge Regression", X_train_scaled, y_train
 )
 
 
@@ -1195,16 +1271,56 @@ print(
 # %% [markdown]
 # ## 5. Mô hình Nâng cao
 # %%
-from sklearn.linear_model import BayesianRidge
+from sklearn.linear_model import (
+    BayesianRidge,
+    HuberRegressor,
+    LinearRegression,
+    RidgeCV,
+    Ridge,
+)
 from sklearn.kernel_ridge import KernelRidge
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
+from sklearn.utils import resample
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import GridSearchCV
+import time
+
+# %% [markdown]
+# ### 5.1 Bayesian Regression & Evidence Maximization
+# %%
+
+# Chạy Bayesian Ridge
+start_bayes = time.time()
+model_bayes = BayesianRidge(max_iter=300, compute_score=True)
+model_bayes.fit(X_train_scaled, y_train)
+time_bayes = time.time() - start_bayes
+
+# Chạy RidgeCV để so sánh thời gian và MSE
+start_ridgecv = time.time()
+ridge_cv_model = RidgeCV(alphas=np.logspace(-2, 4, 30), cv=10)
+ridge_cv_model.fit(X_train_scaled, y_train)
+time_ridgecv = time.time() - start_ridgecv
+
+print(f"Bayesian Ridge (Evidence Maximization):")
+print(f" - Optimal Alpha (noise precision): {model_bayes.alpha_:.4f}")
+print(f" - Optimal Lambda (weight precision): {model_bayes.lambda_:.4f}")
+print(f" - LML Score (Maximized Evidence): {model_bayes.scores_[-1]:.4f}")
+print(f" - Training Time: {time_bayes:.4f} sec")
+print(
+    f" - Test MSE: {mean_squared_error(y_test, model_bayes.predict(X_test_scaled)):.4f}\n"
+)
+
+print(f"Ridge CV:")
+print(f" - Optimal Regularization Alpha: {ridge_cv_model.alpha_:.4f}")
+print(f" - Training Time: {time_ridgecv:.4f} sec")
+print(
+    f" - Test MSE: {mean_squared_error(y_test, ridge_cv_model.predict(X_test_scaled)):.4f}"
+)
 
 
 def fit_pred_bayes(X_tr, y_tr, X_val):
-    model = BayesianRidge()
-    model.fit(X_tr, y_tr)
-    return model.predict(X_val), model
+    return model_bayes.predict(X_val), model_bayes
 
 
 _ = evaluate_model(
@@ -1218,23 +1334,23 @@ _ = evaluate_model(
     y_val,
 )
 
-# %% [markdown]
-# #### Khoảng tự tin (Predictive Distribution) của Hồi quy Bayesian
-# %%
-model_bayes = BayesianRidge()
-model_bayes.fit(X_train_scaled, y_train)
-y_pred_bayes, y_std_bayes = model_bayes.predict(X_test_scaled, return_std=True)
+plot_sklearn_learning_curve_wrapper(
+    BayesianRidge(max_iter=300), "Bayesian Ridge", X_train_scaled, y_train
+)
 
-# Trực quan hoá 100 điểm test ngẫu nhiên để thấy rõ dải tự tin
+# Plot Dải tự tin test
+y_pred_bayes, y_std_bayes = model_bayes.predict(X_test_scaled, return_std=True)
 np.random.seed(42)
 indices = np.random.choice(len(y_test), 100, replace=False)
 sorted_idx = np.argsort(y_pred_bayes[indices])
 idx_to_plot = indices[sorted_idx]
 
-plt.figure(figsize=(12, 6))
-plt.plot(y_pred_bayes[idx_to_plot], color="teal", label="Dự đoán (Predicted)", lw=2)
+plt.figure(figsize=(12, 5))
+plt.plot(
+    y_pred_bayes[idx_to_plot], color="teal", label="Predicted Mean $\\bar{f}^*$", lw=2
+)
 plt.scatter(
-    range(100), y_test[idx_to_plot], color="coral", label="Thực tế (Actual)", zorder=3
+    range(100), y_test[idx_to_plot], color="coral", label="Actual Data", zorder=3
 )
 plt.fill_between(
     range(100),
@@ -1242,32 +1358,81 @@ plt.fill_between(
     y_pred_bayes[idx_to_plot] + 2 * y_std_bayes[idx_to_plot],
     color="lightblue",
     alpha=0.5,
-    label="Vùng bất định ±2σ",
+    label="Uncertainty $\\pm 2\\sigma$",
 )
-plt.title("Bayesian Ridge: Predictive Distribution (100 Test Samples)")
-plt.ylabel("cnt (Số lượng xe)")
-plt.xlabel("Chỉ mục Mẫu (Sắp xếp theo giá trị Dự đoán)")
+plt.title("Bayesian Ridge: Predictive Distribution (Posterior p(w|t))")
+plt.xlabel("Sample Index (Sorted)")
+plt.ylabel("cnt")
 plt.legend()
 plt.show()
 
+# %% [markdown]
+# ### 5.2 Kernel Ridge Regression (KRR)
+# Cài đặt với 2 Kernel: RBF và Polynomial và chọn tham số bằng Cross-Validation.
+# %%
+
+krr_params = {
+    "kernel": ["rbf", "polynomial"],
+    "alpha": np.logspace(-2, 2, 3),  # Regularization
+    "gamma": np.logspace(-2, 0, 3),  # Bandwidth cho RBF / Poly
+    "degree": [2, 3],  # Chỉ dùng nếu kernel là polynomial
+}
+
+# Subsample để GridSearch chạy nhanh hơn do KRR scale O(N^3)
+X_train_sub, y_train_sub = resample(
+    X_train_scaled, y_train, n_samples=3000, random_state=42
+)
+
+krr_grid = GridSearchCV(
+    KernelRidge(), krr_params, cv=3, scoring="neg_mean_squared_error", n_jobs=-1
+)
+krr_grid.fit(X_train_sub, y_train_sub)
+
+print(f"Optimal KRR Parameters: {krr_grid.best_params_}")
+
+model_krr = krr_grid.best_estimator_
+model_krr.fit(X_train_scaled, y_train)
+
 
 def fit_pred_kr(X_tr, y_tr, X_val):
-    kr = KernelRidge(kernel="rbf", alpha=0.1, gamma=0.1)
-    kr.fit(X_tr, y_tr)
-    return kr.predict(X_val), kr
+    return model_krr.predict(X_val), model_krr
 
 
 _ = evaluate_model(
-    "Kernel Ridge (RBF)", fit_pred_kr, X_train_scaled, y_train, X_test_scaled, y_test
+    "Kernel Ridge (CV)",
+    fit_pred_kr,
+    X_train_scaled,
+    y_train,
+    X_test_scaled,
+    y_test,
+    X_val_scaled,
+    y_val,
 )
+
+plot_sklearn_learning_curve_wrapper(
+    KernelRidge(**krr_grid.best_params_), "Kernel Ridge", X_train_sub, y_train_sub
+)
+
+# %% [markdown]
+# ### 5.3 Gaussian Process Regression (GPR)
+# Tối ưu Log-Marginal-Likelihood bằng gradient ascent L-BFGS-B (mặc định Sklearn)
+# %%
+# Sử dụng ConstantKernel * RBF để học scale chiều cao và chiều ngang
+kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2))
+
+# GPR chạy rất lâu với N lớn, phải subsample
+X_gpr_tr, y_gpr_tr = resample(X_train_scaled, y_train, n_samples=1500, random_state=42)
+
+gpr = GaussianProcessRegressor(
+    kernel=kernel, alpha=0.5, n_restarts_optimizer=2, random_state=42
+)
+gpr.fit(X_gpr_tr, y_gpr_tr)
+
+print(f"Learned Kernel Parameters (Gradient Ascent): {gpr.kernel_}")
+print(f"Maximized Log-Marginal-Likelihood: {gpr.log_marginal_likelihood_value_:.4f}")
 
 
 def fit_pred_gpr(X_tr, y_tr, X_val):
-    kernel = C(1.0, (1e-3, 1e3)) * RBF(
-        length_scale=1.0, length_scale_bounds=(1e-2, 1e2)
-    )
-    gpr = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=0, alpha=0.1)
-    gpr.fit(X_tr, y_tr)
     return gpr.predict(X_val), gpr
 
 
@@ -1282,166 +1447,217 @@ _ = evaluate_model(
     y_val,
 )
 
-# %% [markdown]
-# #### Khoảng tự tin (Predictive Posterior) của Gaussian Process
-# %%
-gpr_plot = GaussianProcessRegressor(
-    kernel=C(1.0, (1e-3, 1e3)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2)),
-    n_restarts_optimizer=0,
-    alpha=0.1,
+plot_sklearn_learning_curve_wrapper(
+    GaussianProcessRegressor(kernel=kernel, alpha=0.5, random_state=42),
+    "Gaussian Process",
+    X_gpr_tr,
+    y_gpr_tr,
 )
-gpr_plot.fit(X_train_scaled, y_train)
-y_pred_gp, y_std_gp = gpr_plot.predict(X_test_scaled, return_std=True)
 
-indices_gp = np.random.choice(len(y_test), 50, replace=False)
-sorted_idx_gp = np.argsort(y_pred_gp[indices_gp])
-idx_to_plot_gp = indices_gp[sorted_idx_gp]
+y_pred_gp, y_std_gp = gpr.predict(X_test_scaled, return_std=True)
 
-plt.figure(figsize=(12, 6))
-plt.plot(y_pred_gp[idx_to_plot_gp], color="teal", label="Dự đoán (Predicted)", lw=2)
+plt.figure(figsize=(12, 5))
+plt.plot(
+    y_pred_gp[idx_to_plot], color="purple", label="Predicted Mean $\\bar{f}^*$", lw=2
+)
 plt.scatter(
-    range(50), y_test[idx_to_plot_gp], color="coral", label="Thực tế (Actual)", zorder=3
+    range(100), y_test[idx_to_plot], color="coral", label="Actual Data", zorder=3
 )
 plt.fill_between(
-    range(50),
-    y_pred_gp[idx_to_plot_gp] - 2 * y_std_gp[idx_to_plot_gp],
-    y_pred_gp[idx_to_plot_gp] + 2 * y_std_gp[idx_to_plot_gp],
-    color="lightgreen",
+    range(100),
+    y_pred_gp[idx_to_plot] - 2 * y_std_gp[idx_to_plot],
+    y_pred_gp[idx_to_plot] + 2 * y_std_gp[idx_to_plot],
+    color="plum",
     alpha=0.5,
-    label="Vùng bất định ±2σ",
+    label="Uncertainty $\\pm 2\\sigma$",
 )
-plt.title("Gaussian Process: Posterior Predictive (50 Test Samples)")
-plt.ylabel("cnt (Số lượng xe)")
-plt.xlabel("Chỉ mục Mẫu (Sắp xếp theo giá trị Dự đoán)")
+plt.title("Gaussian Process: Posterior Predictive (Test Samples)")
+plt.xlabel("Sample Index (Sorted)")
+plt.ylabel("cnt")
 plt.legend()
 plt.show()
 
 # %% [markdown]
-# ## 6. Đánh giá Tổng hợp
-# ### Learning Curves Mẫu Train theo Data Size
+# ### 5.4 Robust Regression (IRLS với Huber Loss)
+# So sánh tính Robust của Huber và OLS trên dữ liệu có Outliers
 # %%
-# Gọi hàm helper đã viết ở phía trên để vẽ đường học tập theo số lượng mẫu
-plot_learning_curve_data_size(
-    "Ridge Regression", fit_pred_ridge, X_train_scaled_b, y_train, X_val_scaled_b, y_val
+# Bơm outlier (Nhiễu cực lớn)
+np.random.seed(42)
+outlier_idx = np.random.choice(len(X_train_scaled), 200, replace=False)
+y_train_outlier = y_train.copy().astype(float)
+y_train_outlier[outlier_idx] = 15000  # Nhiễu lớn vô lý
+
+ols_outlier = LinearRegression()
+ols_outlier.fit(X_train_scaled, y_train_outlier)
+ols_outlier_pred = ols_outlier.predict(X_test_scaled)
+ols_mse = mean_squared_error(y_test, ols_outlier_pred)
+
+# Huber Regressor (thực thi IRLS bên dưới)
+huber_outlier = HuberRegressor(epsilon=1.35, max_iter=2000)
+huber_outlier.fit(X_train_scaled, y_train_outlier)
+huber_outlier_pred = huber_outlier.predict(X_test_scaled)
+huber_mse = mean_squared_error(y_test, huber_outlier_pred)
+
+print(f"With Outliers - OLS MSE: {ols_mse:.4f}")
+print(f"With Outliers - Huber MSE: {huber_mse:.4f}")
+
+plt.figure(figsize=(10, 5))
+plt.scatter(y_test, ols_outlier_pred, alpha=0.3, color="red", label="OLS Predictions")
+plt.scatter(
+    y_test, huber_outlier_pred, alpha=0.3, color="blue", label="Huber Predictions"
+)
+plt.plot([0, 10000], [0, 10000], "k--", lw=2, label="Perfect Score")
+plt.title("Sensitivity to Outliers: Normal OLS vs Robust Huber")
+plt.xlabel("True Count")
+plt.ylabel("Predicted Count")
+plt.legend()
+plt.show()
+
+
+def fit_pred_huber(X_tr, y_tr, X_val):
+    model = HuberRegressor(epsilon=1.35, max_iter=2000)
+    model.fit(X_tr, y_tr)
+    return model.predict(X_val), model
+
+
+_ = evaluate_model(
+    "Huber Robust",
+    fit_pred_huber,
+    X_train_scaled,
+    y_train,
+    X_test_scaled,
+    y_test,
+    X_val_scaled,
+    y_val,
 )
 
-# Bạn có thể vẽ thêm cho các mô hình khác (Ví dụ OLS) một cách dễ dàng:
-plot_learning_curve_data_size(
-    "Normal Equations OLS", fit_pred_ols, X_train_b, y_train, X_val_b, y_val
+plot_sklearn_learning_curve_wrapper(
+    HuberRegressor(epsilon=1.35, max_iter=2000), "Huber Robust", X_train_scaled, y_train
 )
 
 # %% [markdown]
-# ### Bảng Phân Tích K-Fold & Kiểm định Thống kê
-# Danh sách thông số đo Mean/Std Error qua 10-Fold CV. Kiểm định Wilcoxon để xác nhận sự cải thiện giữa các mô hình.
+# ### 5.5 Phân tích Bias-Variance Thực Nghiệm (Bootstrap)
+# Bootstrap 200 lần để quan sát Error = Bias^2 + Variance
 # %%
+n_bootstraps = 200
+lambda_range = np.logspace(-2, 5, 20)
+test_size = min(1000, len(y_test))
+X_test_sub = X_test_scaled[:test_size]
+y_test_sub = y_test[:test_size]
+
+biases_sq = []
+variances = []
+mses = []
+
+for lam in lambda_range:
+    all_preds = np.zeros((n_bootstraps, test_size))
+    for b in range(n_bootstraps):
+        X_b, y_b = resample(X_train_scaled, y_train, random_state=b)
+        model = Ridge(alpha=lam)
+        model.fit(X_b, y_b)
+        all_preds[b, :] = model.predict(X_test_sub)
+
+    expected_pred = np.mean(all_preds, axis=0)
+    bias_sq = np.mean((expected_pred - y_test_sub) ** 2)
+    variance = np.mean(np.var(all_preds, axis=0))
+    mse = np.mean((all_preds - y_test_sub) ** 2)
+
+    biases_sq.append(bias_sq)
+    variances.append(variance)
+    mses.append(mse)
+
+plt.figure(figsize=(10, 6))
+plt.plot(
+    np.log10(lambda_range),
+    biases_sq,
+    "b-",
+    label="Bias$^2$ (Error from underfitting)",
+    lw=2,
+)
+plt.plot(
+    np.log10(lambda_range),
+    variances,
+    "r-",
+    label="Variance (Error from overfitting)",
+    lw=2,
+)
+plt.plot(np.log10(lambda_range), mses, "k--", label="Total Expected Error (MSE)", lw=2)
+plt.xlabel("log10(Lambda) [Tăng dần = Giảm độ phức tạp]")
+plt.ylabel("Error")
+plt.title("Bias-Variance Trade-off via Bootstrapping")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# %% [markdown]
+# ## 6. Đánh giá Tổng hợp
+# ### Bảng Phân Tích & Biểu Đồ
+# %%
+import pandas as pd
+import seaborn as sns
+from scipy.stats import wilcoxon
+
 print("\n" + "=" * 60)
 print("BẢNG TỔNG HỢP SO SÁNH TẤT CẢ CÁC MÔ HÌNH")
 print("=" * 60)
 
+# Tạo DataFrame từ metrics_list
 results_df = pd.DataFrame(metrics_list)
-try:
-    from IPython.display import display
 
-    display(results_df)  # Hiển thị đẹp nếu chạy trong Jupyter Notebook
-except ImportError:
-    print(results_df.to_string(index=False))
+# Sắp xếp theo Test R2 giảm dần
+results_df_sorted = results_df.sort_values(by="Test R2", ascending=False)
+print(results_df_sorted.to_string(index=False))
 
-plt.figure(figsize=(12, 6))
+plt.figure(figsize=(12, 8))
 sns.barplot(
-    data=results_df.sort_values(by="Test R2", ascending=False),
+    data=results_df_sorted,
     x="Test R2",
     y="Model",
     palette="viridis",
 )
-plt.title("So sánh Tổng kết R2 của các mô hình Hồi quy (cao nhất là tốt nhất)")
+plt.title("So sánh Tổng kết R2 của các mô hình Hồi quy (Cao nhất là tốt nhất)")
+plt.xlabel("Test R² Score")
+plt.ylabel("")
 plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# ### Biểu đồ Phần dư (Residuals Plot) cho toàn bộ các mô hình
-# Theo dõi trực quan phần dư để kiểm tra giả định ngẫu nhiên / đồng nhất phương sai.
+# ### Kiểm định Thống kê (Wilcoxon Signed-Rank Test)
+# So sánh mô hình có lượng lỗi RMSE bé nhất trên tập Cross-Validation (K-Fold)
+# với tất cả các mô hình còn lại nhằm xác nhận ý nghĩa thống kê của sự cải thiện.
 # %%
-num_models = len(metrics_list)
-cols = 3
-rows = (num_models + cols - 1) // cols
-
-fig, axes = plt.subplots(rows, cols, figsize=(15, 4 * rows))
-axes = axes.flatten()
-
-for i, m in enumerate(metrics_list):
-    m_name = m["Model"]
-    ax = axes[i]
-    m_preds = preds_dict[m_name]
-    m_resids = residuals_dict[m_name]
-
-    ax.scatter(m_preds, m_resids, alpha=0.3, color="coral")
-    ax.axhline(y=0, color="r", linestyle="--", lw=2)
-    ax.set_title(f"{m_name}", fontsize=12)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Residuals")
-
-for j in range(len(metrics_list), len(axes)):
-    fig.delaxes(axes[j])
-
-plt.suptitle(
-    "Residuals (Thực tế - Dự đoán) vs Predicted - Toàn bộ mô hình", fontsize=16, y=1.02
-)
-plt.tight_layout()
-plt.show()
-
 print("\n" + "=" * 60)
-print("KIỂM ĐỊNH THỐNG KÊ PAIRED T-TEST HOẶC WILCOXON")
-print(
-    "Mục đích: Xác nhận xem các mô hình có thực sự khác biệt có ý nghĩa thống kê không."
-)
+print("KIỂM ĐỊNH THỐNG KÊ WILCOXON SIGNED-RANK TEST (10-FOLD CV RMSE)")
 print("=" * 60)
 
-from scipy.stats import ttest_rel
+# Tìm mô hình tốt nhất (RMSE trung bình trên tập CV nhỏ nhất)
+best_model_name = min(cv_scores_dict, key=lambda k: np.mean(cv_scores_dict[k]))
+best_model_cv_scores = cv_scores_dict[best_model_name]
 
-
-def verify_and_compare_kfold(model_base, model_advanced):
-    """
-    Sử dụng Paired t-test trên 10 quan sát tương ứng từ 10-Fold CV (CV RMSE).
-    """
-    rmse_base = cv_scores_dict[model_base]
-    rmse_adv = cv_scores_dict[model_advanced]
-
-    t_stat, p_value = ttest_rel(rmse_base, rmse_adv)
-
-    print(
-        f"\nKiểm định Paired T-Test (trên K-Fold CV) giữa '{model_base}' và '{model_advanced}':"
-    )
-    print(f"T-Statistic = {t_stat:.4f}")
-    if np.isnan(p_value):
-        print("P-Value     = N/A (có thể các Fold RMSE hoàn toàn giống hệt nhau)")
-    else:
-        print(f"P-Value     = {p_value:.4e}")
-
-        if p_value < 0.05:
-            print(
-                f"=> Kết luận: P-value < 0.05. Sự khác biệt giữa {model_base} và {model_advanced} là CÓ Ý NGHĨA THỐNG KÊ."
-            )
-            if np.mean(rmse_adv) < np.mean(rmse_base):
-                print(
-                    f"=> '{model_advanced}' thực sự hoạt động TỐT HƠN '{model_base}' (RMSE nhỏ hơn)."
-                )
-            else:
-                print(
-                    f"=> '{model_base}' thực sự hoạt động TỐT HƠN '{model_advanced}' (RMSE nhỏ hơn)."
-                )
-        else:
-            print(
-                f"=> Kết luận: P-value >= 0.05. Không có sự khác biệt có ý nghĩa thống kê."
-            )
-
-
-# Áp dụng Paired T-test CV K-Fold đối chiếu tất cả các mô hình với Baseline OLS
-base_model = "Normal Equations OLS"
-print(
-    f"--- SO SÁNH TOÀN BỘ CÁC MÔ HÌNH VỚI BASELINE ({base_model}) DỰA TRÊN 10-FOLD CV ---"
-)
+print(f"Mô hình tốt nhất (Tham chiếu): '{best_model_name}'")
+print("-" * 60)
 
 for m in metrics_list:
     current_model = m["Model"]
-    if current_model != base_model:
-        verify_and_compare_kfold(base_model, current_model)
+    if current_model == best_model_name:
+        continue
+
+    current_model_cv_scores = cv_scores_dict[current_model]
+
+    # Thực hiện kiểm định Wilcoxon
+    try:
+        stat, p_value = wilcoxon(best_model_cv_scores, current_model_cv_scores)
+
+        print(f"So sánh với '{current_model}':")
+        print(f"   => p-value = {p_value:.4e}")
+        if p_value < 0.05:
+            print(
+                f"   => KẾT LUẬN: Sự khác biệt CÓ ý nghĩa thống kê (p < 0.05). '{best_model_name}' thực sự ưu việt hơn."
+            )
+        else:
+            print(
+                f"   => KẾT LUẬN: KHÔNG có khác biệt có ý nghĩa thống kê. Hai mô hình hoạt động tương đương nhau."
+            )
+    except Exception as e:
+        print(f"So sánh với '{current_model}': Bỏ qua kiểm định do ({str(e)})")
+    print("-" * 60)
