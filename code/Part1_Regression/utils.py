@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from pathlib import Path
 from scipy import stats
 from sklearn.model_selection import KFold, learning_curve
 import warnings
@@ -51,9 +52,9 @@ def update_registry(
 
 
 def load_bike_data():
-    train_df = pd.read_csv("../../data/train.csv")
-    val_df = pd.read_csv("../../data/val.csv")
-    test_df = pd.read_csv("../../data/test.csv")
+    train_df = pd.read_csv(Path(__file__).parent / "../../data/train.csv")
+    val_df = pd.read_csv(Path(__file__).parent / "../../data/val.csv")
+    test_df = pd.read_csv(Path(__file__).parent / "../../data/test.csv")
 
     features_to_drop = ["instant", "dteday", "casual", "registered"]
 
