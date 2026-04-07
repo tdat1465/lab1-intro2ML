@@ -188,18 +188,37 @@ class BaseClassifier:
         raise NotImplementedError
 
 class LogisticRegressionGD(BaseClassifier):
-    def __init__(self, learning_rate=0.1, max_epochs=1000, multi_class='ovr'):
+    def __init__(self, learning_rate=0.1, max_epochs=1000, multi_class='ovr', class_weight=None):
         super().__init__()
         self.learning_rate = learning_rate
         self.max_epochs = max_epochs
         self.multi_class = multi_class
+        self.class_weight = class_weight
         self.loss_history = []
+        self.class_weight_map_ = None
 
     def fit(self, X, y):
         self.classes_ = np.unique(y)
         K = len(self.classes_)
         N, D = X.shape
         X_b = add_bias(X)
+
+        # Build class weights c_k in E = -sum_{n,k} c_k t_nk log y_nk.
+        # If class_weight='balanced', set c_k proportional to N / N_k.
+        if self.class_weight is None:
+            class_weight_map = {c: 1.0 for c in self.classes_}
+        elif self.class_weight == 'balanced':
+            counts = {c: np.sum(y == c) for c in self.classes_}
+            raw = {c: (N / counts[c]) if counts[c] > 0 else 1.0 for c in self.classes_}
+            mean_w = np.mean(list(raw.values()))
+            class_weight_map = {c: (raw[c] / mean_w) for c in self.classes_}
+        elif isinstance(self.class_weight, dict):
+            class_weight_map = {c: float(self.class_weight.get(c, 1.0)) for c in self.classes_}
+        else:
+            raise ValueError("class_weight must be None, 'balanced', or a dict {class_label: weight}")
+
+        self.class_weight_map_ = class_weight_map
+        sample_weights = np.array([class_weight_map[c] for c in y], dtype=float)
 
         if self.multi_class == 'multinomial':
             self.w = np.zeros((D + 1, K))
@@ -211,9 +230,11 @@ class LogisticRegressionGD(BaseClassifier):
             for epoch in range(self.max_epochs):
                 Z = X_b @ self.w
                 Y_pred = softmax(Z)
-                grad = X_b.T @ (Y_pred - Y_onehot) / N
+                weighted_error = (Y_pred - Y_onehot) * sample_weights[:, None]
+                grad = X_b.T @ weighted_error / N
                 self.w -= self.learning_rate * grad
-                loss = -np.mean(np.sum(Y_onehot * np.log(Y_pred + 1e-9), axis=1))
+                ce_per_sample = -np.sum(Y_onehot * np.log(Y_pred + 1e-9), axis=1)
+                loss = np.mean(sample_weights * ce_per_sample)
                 self.loss_history.append(loss)
         else:
             if K > 2:
@@ -223,9 +244,14 @@ class LogisticRegressionGD(BaseClassifier):
 
             for epoch in range(self.max_epochs):
                 Y_pred = sigmoid(X_b @ self.w)
-                grad = X_b.T @ (Y_pred - y_bin) / N
+                error = (Y_pred - y_bin) * sample_weights
+                grad = X_b.T @ error / N
                 self.w -= self.learning_rate * grad
-                loss = -np.mean(y_bin * np.log(Y_pred + 1e-9) + (1 - y_bin) * np.log(1 - Y_pred + 1e-9))
+                bce = -(
+                    y_bin * np.log(Y_pred + 1e-9)
+                    + (1 - y_bin) * np.log(1 - Y_pred + 1e-9)
+                )
+                loss = np.mean(sample_weights * bce)
                 self.loss_history.append(loss)
         return self
 
