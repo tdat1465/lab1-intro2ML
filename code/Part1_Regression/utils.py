@@ -52,9 +52,9 @@ def update_registry(
 
 
 def load_bike_data():
-    train_df = pd.read_csv(Path(__file__).parent / "../../data/train.csv")
-    val_df = pd.read_csv(Path(__file__).parent / "../../data/val.csv")
-    test_df = pd.read_csv(Path(__file__).parent / "../../data/test.csv")
+    train_df = pd.read_csv(Path(__file__).parent / "../../data/regression/train.csv")
+    val_df = pd.read_csv(Path(__file__).parent / "../../data/regression/val.csv")
+    test_df = pd.read_csv(Path(__file__).parent / "../../data/regression/test.csv")
 
     features_to_drop = ["instant", "dteday", "casual", "registered"]
 
