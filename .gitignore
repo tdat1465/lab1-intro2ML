@@ -2,3 +2,4 @@
 /code/Part1_Regression/imgs
 *.pyc
 *.pkl
+/code/Part1_Regression/results/robustness_logs

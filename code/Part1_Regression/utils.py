@@ -1,5 +1,9 @@
 import os
 import pickle
+import json
+import time
+import random
+import tracemalloc
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -7,16 +11,18 @@ import seaborn as sns
 from pathlib import Path
 from scipy import stats
 from sklearn.model_selection import KFold, learning_curve
+from sklearn.model_selection import train_test_split
+from sklearn.impute import SimpleImputer, KNNImputer
 import warnings
 
 warnings.filterwarnings("ignore")
 sns.set_theme(style="whitegrid")
 
-REGISTRY_PATH = "results/metrics_registry.pkl"
+REGISTRY_PATH = Path(__file__).resolve().parent / "results" / "metrics_registry.pkl"
 
 
 def load_registry():
-    if os.path.exists(REGISTRY_PATH):
+    if REGISTRY_PATH.exists():
         with open(REGISTRY_PATH, "rb") as f:
             return pickle.load(f)
     return {
@@ -30,7 +36,7 @@ def load_registry():
 
 def save_registry(data):
     # Đảm bảo folder exists
-    os.makedirs(os.path.dirname(REGISTRY_PATH), exist_ok=True)
+    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(REGISTRY_PATH, "wb") as f:
         pickle.dump(data, f)
 
@@ -308,3 +314,116 @@ def plot_sklearn_learning_curve_wrapper(estimator, title, X, y, cv=5):
     plt.legend(loc="best")
     plt.grid(True)
     plt.show()
+
+
+def set_global_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+
+
+def load_full_bike_data():
+    base = Path(__file__).parent / "../../data/regression"
+    train_df = pd.read_csv(base / "train.csv")
+    val_df = pd.read_csv(base / "val.csv")
+    test_df = pd.read_csv(base / "test.csv")
+    full_df = pd.concat([train_df, val_df, test_df], axis=0, ignore_index=True)
+
+    features_to_drop = ["instant", "dteday", "casual", "registered"]
+    feature_df = full_df.drop(columns=features_to_drop + ["cnt"], errors="ignore")
+    X = feature_df.values
+    y = full_df["cnt"].values
+    return full_df, feature_df.columns.tolist(), X, y
+
+
+def add_bias_column(X):
+    return np.c_[np.ones((X.shape[0], 1)), X]
+
+
+def regression_metrics(y_true, y_pred):
+    mse = float(np.mean((y_true - y_pred) ** 2))
+    rmse = float(np.sqrt(mse))
+    mae = float(np.mean(np.abs(y_true - y_pred)))
+    den = np.sum((y_true - np.mean(y_true)) ** 2)
+    r2 = float(1 - (np.sum((y_true - y_pred) ** 2) / den)) if den > 0 else np.nan
+    return {"mse": mse, "rmse": rmse, "mae": mae, "r2": r2}
+
+
+def create_split_indices(n_samples, train_ratio, seed=42, val_ratio_in_train=0.2):
+    all_idx = np.arange(n_samples)
+    train_idx, test_idx = train_test_split(
+        all_idx,
+        test_size=(1.0 - train_ratio),
+        random_state=seed,
+        shuffle=True,
+    )
+    tr_idx, val_idx = train_test_split(
+        train_idx,
+        test_size=val_ratio_in_train,
+        random_state=seed,
+        shuffle=True,
+    )
+    return {
+        "train_idx": np.array(tr_idx),
+        "val_idx": np.array(val_idx),
+        "test_idx": np.array(test_idx),
+    }
+
+
+def apply_gaussian_noise(X, sigma, seed=42):
+    rng = np.random.default_rng(seed)
+    return X + rng.normal(0.0, sigma, size=X.shape)
+
+
+def corrupt_features(X, corruption_rate, seed=42):
+    rng = np.random.default_rng(seed)
+    X_corrupted = X.copy().astype(float)
+    mask = rng.random(X_corrupted.shape) < corruption_rate
+    X_corrupted[mask] = np.nan
+    return X_corrupted, mask
+
+
+def impute_features(X_train, X_other, strategy="mean"):
+    if strategy == "knn":
+        imputer = KNNImputer(n_neighbors=5)
+    else:
+        imputer = SimpleImputer(strategy=strategy)
+    X_train_imp = imputer.fit_transform(X_train)
+    X_other_imp = imputer.transform(X_other)
+    return X_train_imp, X_other_imp
+
+
+def profile_run(run_fn, *args, **kwargs):
+    tracemalloc.start()
+    t0 = time.perf_counter()
+    output = run_fn(*args, **kwargs)
+    elapsed = time.perf_counter() - t0
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    peak_mb = peak / (1024.0 * 1024.0)
+    return output, elapsed, peak_mb
+
+
+def fold_metrics_for_model(model_fit_predict_fn, X, y, n_splits=5, seed=42):
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    fold_rows = []
+    for fold_id, (tr_idx, va_idx) in enumerate(kf.split(X), start=1):
+        y_pred, _ = model_fit_predict_fn(X[tr_idx], y[tr_idx], X[va_idx])
+        m = regression_metrics(y[va_idx], y_pred)
+        fold_rows.append(
+            {
+                "fold": fold_id,
+                "train_size": int(len(tr_idx)),
+                "val_size": int(len(va_idx)),
+                "mse": m["mse"],
+                "rmse": m["rmse"],
+                "mae": m["mae"],
+                "r2": m["r2"],
+            }
+        )
+    return fold_rows
+
+
+def save_json(path, payload):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
