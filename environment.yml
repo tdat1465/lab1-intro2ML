@@ -13,3 +13,4 @@ dependencies:
   - statsmodels=0.14.2
   - jupyter=1.0.0
   - ipykernel=6.29.5
+  - openpyxl
