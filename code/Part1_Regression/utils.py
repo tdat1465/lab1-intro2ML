@@ -353,14 +353,12 @@ def create_split_indices(n_samples, train_ratio, seed=42, val_ratio_in_train=0.2
     train_idx, test_idx = train_test_split(
         all_idx,
         test_size=(1.0 - train_ratio),
-        random_state=seed,
-        shuffle=True,
+        shuffle=False,
     )
     tr_idx, val_idx = train_test_split(
         train_idx,
         test_size=val_ratio_in_train,
-        random_state=seed,
-        shuffle=True,
+        shuffle=False,
     )
     return {
         "train_idx": np.array(tr_idx),
@@ -404,7 +402,7 @@ def profile_run(run_fn, *args, **kwargs):
 
 
 def fold_metrics_for_model(model_fit_predict_fn, X, y, n_splits=5, seed=42):
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    kf = KFold(n_splits=n_splits, shuffle=False)
     fold_rows = []
     for fold_id, (tr_idx, va_idx) in enumerate(kf.split(X), start=1):
         y_pred, _ = model_fit_predict_fn(X[tr_idx], y[tr_idx], X[va_idx])
