@@ -3,12 +3,13 @@ channels:
   - defaults
   - conda-forge
 dependencies:
-  - python=3.10
-  - numpy
-  - pandas
-  - matplotlib
-  - seaborn
-  - scipy
-  - scikit-learn
-  - jupyter
-  - ipykernel
+  - python=3.10.14
+  - numpy=1.26.4
+  - pandas=2.2.2
+  - matplotlib=3.8.4
+  - seaborn=0.13.2
+  - scipy=1.13.1
+  - scikit-learn=1.4.2
+  - statsmodels=0.14.2
+  - jupyter=1.0.0
+  - ipykernel=6.29.5
